@@ -92,9 +92,11 @@
   .view.on { display: block; animation: rise .26s ease both; }
   body.booting .view { display: none; }
 
+  /* Opacity only, deliberately: a transform here would make .view the
+     containing block for the docked video and unpin it from the viewport. */
   @keyframes rise {
-    from { opacity: 0; transform: translateY(8px); }
-    to   { opacity: 1; transform: none; }
+    from { opacity: 0; }
+    to   { opacity: 1; }
   }
 
   /* ---------- password ---------- */
@@ -182,6 +184,7 @@
   }
 
   .stage {
+    position: relative;
     width: 100%;
     aspect-ratio: 16 / 9;
     border-radius: 10px;
@@ -190,6 +193,51 @@
     box-shadow: 0 22px 60px rgba(2, 10, 28, .55);
   }
   .stage iframe { display: block; width: 100%; height: 100%; border: 0; }
+
+  /* The video keeps playing while you scroll: once the hero position
+     scrolls away it becomes a floating player, bottom right. The element
+     is never moved in the DOM, so playback is not interrupted. */
+  .stagewrap { width: 100%; aspect-ratio: 16 / 9; }
+
+  .stage.docked {
+    position: fixed;
+    right: var(--pad);
+    bottom: var(--pad);
+    left: auto;
+    width: 372px;
+    z-index: 30;
+    border: 1px solid rgba(255,255,255,.14);
+    box-shadow: 0 20px 50px rgba(0,0,0,.62);
+    animation: dockin .22s ease both;
+  }
+  .stage.away { display: none; }
+
+  @keyframes dockin {
+    from { opacity: 0; transform: translateY(14px) scale(.96); }
+    to   { opacity: 1; transform: none; }
+  }
+
+  .undock {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 26px;
+    height: 26px;
+    z-index: 2;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 999px;
+    background: #10233f;
+    color: rgba(255,255,255,.72);
+    font: 500 15px/1 var(--font);
+    cursor: pointer;
+    box-shadow: 0 3px 10px rgba(0,0,0,.5);
+    transition: color .16s ease, background .16s ease;
+  }
+  .undock:hover { color: #fff; background: #1b3559; }
+  .stage.docked .undock { display: flex; }
 
   .sheets {
     margin-top: clamp(34px, 5vw, 60px);
@@ -427,7 +475,13 @@
     font-weight: 500;
   }
 
+  /* Narrower on the widths where the workbook column runs close to the
+     right edge, so the player clips as little of it as possible. */
+  @media (max-width: 1500px) { .stage.docked { width: 330px; } }
+  @media (max-width: 820px)  { .stage.docked { width: 300px; } }
+
   @media (max-width: 620px) {
+    .stage.docked { width: min(62vw, 260px); }
     .logo { width: 116px; }
     .entry { flex-direction: column; align-items: stretch; width: min(320px, 78vw); }
     #pw { width: 100%; }
@@ -513,7 +567,9 @@
       <p class="eyebrow">Manager Essentials</p>
       <h1 class="title" id="title">The 4 Hats of Leadership</h1>
     </div>
-    <div class="stage" id="stage"></div>
+    <div class="stagewrap" id="stagewrap">
+      <div class="stage" id="stage"></div>
+    </div>
     <div class="sheets" id="sheets"></div>
 
     <div class="allbox">
@@ -539,9 +595,9 @@
      ------------------------------------------------------------------ */
 
   const VAULT = {
-    salt: "KSlsPZTqjysEoqvfFXWzeQ==",
-    iv:   "axiCSJ/ZORpHjwaX",
-    data: "387JMjh5+dcRr4A9CwHxOsTRpMTA2E0OPqFtlSSgOqgQKINCcHo3d4tAoNvDGmE6mxMTUYU0age84T3my5cKIMiSKO4wfob/Dto=",
+    salt: "yv0WPJzK84zjJJ6+KHVNrQ==",
+    iv:   "o27D5w8oOrWUfV8q",
+    data: "Dbiy6SXbLbMdjbPOLNLhVoH8ajC+khW2gUYz597XSNPGhOmlX44AjXtsiHdcWBwEO73zXKYvXo/uVDPu4tJwi2UrZpvzFUIoUss=",
     iters: 200000
   };
 
@@ -1003,6 +1059,48 @@
 
   function grow(el) { el.style.height = "auto"; el.style.height = (el.scrollHeight + 2) + "px"; }
 
+  /* Keep the recording on screen while the workbook is being filled in.
+     The iframe is never re-parented — only the wrapper's CSS changes — so
+     the video keeps playing from wherever it is. */
+  function dockOnScroll() {
+    const stage = $("stage"), wrap = $("stagewrap");
+    let dismissed = false;
+
+    const x = document.createElement("button");
+    x.type = "button";
+    x.className = "undock";
+    x.setAttribute("aria-label", "Hide the video");
+    x.textContent = "×";
+    x.addEventListener("click", function () {
+      dismissed = true;
+      stage.classList.add("away");
+    });
+    stage.appendChild(x);
+
+    const apply = function (past) {
+      if (past && !dismissed) {
+        stage.classList.add("docked");
+        stage.classList.remove("away");
+      } else if (past) {
+        stage.classList.add("docked", "away");
+      } else {
+        dismissed = false;
+        stage.classList.remove("docked", "away");
+      }
+    };
+
+    if ("IntersectionObserver" in window) {
+      new IntersectionObserver(function (entries) {
+        const e = entries[0];
+        apply(!e.isIntersecting && e.boundingClientRect.bottom < 0);
+      }, { threshold: 0 }).observe(wrap);
+    } else {
+      window.addEventListener("scroll", function () {
+        apply(wrap.getBoundingClientRect().bottom < 0);
+      }, { passive: true });
+    }
+  }
+
   function refresh() {
     const ks = allKeys();
     const left = ks.filter(function (k) { return !(ANSWERS[k] || "").trim(); }).length;
@@ -1018,6 +1116,8 @@
       '<iframe src="https://www.youtube-nocookie.com/embed/' + info.video + '?rel=0" ' +
       'title="' + esc(info.title) + '" allowfullscreen ' +
       'allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"></iframe>';
+
+    dockOnScroll();
 
     $("sheets").innerHTML = PAGES.map(sheetHTML).join("");
     $("sheets").querySelectorAll("textarea.f").forEach(grow);
